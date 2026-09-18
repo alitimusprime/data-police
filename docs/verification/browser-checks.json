@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "checks": [
+    "Healthy baseline has 19 real datasets",
+    "Baseline has no active incidents",
+    "Dataset profile renders measured schema",
+    "Rule creation persists through API",
+    "SQL source connection check works",
+    "Injected source fault forms one coherent incident",
+    "Raw payment source ranks first",
+    "Evidence-grounded report generated",
+    "Incident ownership and state update work",
+    "Incident report exports as Markdown",
+    "Interactive lineage is connected to dataset registry",
+    "Mobile navigation is hidden until requested",
+    "Mobile viewport has no document overflow",
+    "Mobile navigation works",
+    "Two clean runs automatically resolve the incident",
+    "API documentation loads without a third-party CDN",
+    "No JavaScript runtime errors",
+    "No unexpected HTTP errors"
+  ],
+  "errors": [],
+  "failedResponses": []
+}

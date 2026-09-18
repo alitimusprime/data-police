@@ -1,0 +1,116 @@
+name: data-police
+
+x-environment: &environment
+  DP_ENV: development
+  DP_DATA_DIR: /app/runtime
+  DP_DATABASE_URL: postgresql+psycopg://dp:${POSTGRES_PASSWORD:?Run bootstrap first}@postgres:5432/datapolice
+  DP_SOURCE_DATABASE_URL: postgresql+psycopg://dp:${POSTGRES_PASSWORD}@postgres:5432/northstar
+  DP_DEMO_API_URL: http://demo-api:8001
+  DP_REDIS_URL: redis://:${REDIS_PASSWORD:?Run bootstrap first}@redis:6379/0
+  DP_EXECUTOR: celery
+  DP_AUTO_RUN_SECONDS: "0"
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  DAGSTER_HOME: /app/infra/dagster
+
+x-app: &app
+  image: data-police:local
+  build: .
+  env_file: .env
+  environment: *environment
+  volumes:
+    - ./runtime/app:/app/runtime
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_USER: dp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run bootstrap first}
+      POSTGRES_DB: datapolice
+    volumes:
+      - ./runtime/postgres:/var/lib/postgresql/data
+      - ./infra/init-databases.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U dp -d datapolice]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes", --requirepass, "${REDIS_PASSWORD}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - ./runtime/redis:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  permissions:
+    <<: *app
+    user: "0:0"
+    command: [chown, "10001:10001", /app/runtime]
+    restart: "no"
+  migrate:
+    <<: *app
+    command: [python, -m, alembic, upgrade, head]
+    depends_on:
+      postgres: {condition: service_healthy}
+      permissions: {condition: service_completed_successfully}
+    restart: "no"
+  demo-api:
+    <<: *app
+    command: [python, -m, uvicorn, data_police.demo_api:app, --host, 0.0.0.0, --port, "8001"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      permissions: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  seed:
+    <<: *app
+    command: [python, -m, data_police.cli, seed, --batches, "12"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      demo-api: {condition: service_healthy}
+    restart: "no"
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  worker:
+    <<: *app
+    command: [python, -m, celery, -A, data_police.jobs:celery_app, worker, --loglevel=INFO, --concurrency=1]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  monitor:
+    <<: *app
+    command: [python, -m, data_police.cli, scheduler]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  dagster-web:
+    <<: *app
+    command: [dagster-webserver, -h, 0.0.0.0, -p, "3001", -w, /app/infra/dagster/workspace.yaml]
+    ports: ["127.0.0.1:3001:3001"]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+  dagster-daemon:
+    <<: *app
+    command: [dagster-daemon, run, -w, /app/infra/dagster/workspace.yaml]
+    depends_on:
+      seed: {condition: service_completed_successfully}

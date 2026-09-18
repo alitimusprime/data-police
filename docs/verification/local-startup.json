@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "checks": [
+    "Clean local installation and migration",
+    "Generated credentials accepted",
+    "Twelve measured baseline runs",
+    "Nineteen healthy datasets",
+    "Bundled product interface and API docs"
+  ]
+}
