@@ -24,10 +24,21 @@ from .pipeline import create_run, execute_run
 def retail_assets(context: dg.AssetExecutionContext):
     identifier = create_run(key="dagster:" + context.run.run_id, trigger="dagster")
     execute_run(identifier)
+
     with session_scope() as session:
         run = session.get(Run, identifier)
-        profiles = session.scalars(select(Profile).where(Profile.run_id == identifier)).all()
-    for profile in profiles:
+        profiles = {
+            profile.dataset_id: profile
+            for profile in session.scalars(
+                select(Profile).where(Profile.run_id == identifier)
+            ).all()
+        }
+
+    for asset in ASSETS:
+        profile = profiles.get(asset.id)
+        if profile is None:
+            continue
+
         yield dg.MaterializeResult(
             asset_key=profile.dataset_id,
             metadata={
@@ -38,14 +49,26 @@ def retail_assets(context: dg.AssetExecutionContext):
                 "data_police_run": identifier,
             },
         )
+
     if run.status != "succeeded":
         raise dg.Failure(
             description=f"Data Police pipeline ended with {run.status}: {run.error or 'source paused'}"
         )
 
 
-retail_job = dg.define_asset_job("retail_reliability", selection=dg.AssetSelection.assets(retail_assets))
-retail_schedule = dg.ScheduleDefinition(
-    job=retail_job, cron_schedule="*/2 * * * *", default_status=dg.DefaultScheduleStatus.RUNNING
+retail_job = dg.define_asset_job(
+    "retail_reliability",
+    selection=dg.AssetSelection.assets(retail_assets),
 )
-defs = dg.Definitions(assets=[retail_assets], jobs=[retail_job], schedules=[retail_schedule])
+
+retail_schedule = dg.ScheduleDefinition(
+    job=retail_job,
+    cron_schedule="*/2 * * * *",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+
+defs = dg.Definitions(
+    assets=[retail_assets],
+    jobs=[retail_job],
+    schedules=[retail_schedule],
+)
