@@ -1,74 +1,214 @@
 # Data Police
 
-**A data reliability workspace that connects a downstream symptom to its upstream evidence.**
+[![Data Police CI](https://github.com/alitimusprime/data-police/actions/workflows/ci.yml/badge.svg)](https://github.com/alitimusprime/data-police/actions/workflows/ci.yml)
 
-Data Police ingests a synthetic retail ecosystem through real SQL, HTTP and file interfaces, stores immutable dataset batches, measures their health, and groups related failures into investigations. Operators can trace dependencies, inspect evidence, assign incidents, change quality rules and verify recovery from one interface.
+**A self-hosted data reliability workspace for finding where a data problem started and what it affected.**
 
-Version 0.1.0 is a self-hosted, single-workspace product build. Start with [START_HERE.md](START_HERE.md) for the Windows/WSL and D-drive setup. The release includes the source and a compiled interface.
+Data Police ingests a synthetic retail ecosystem through SQL, HTTP, and CSV interfaces. It stores immutable dataset batches, profiles their health, evaluates quality rules, detects anomalies, and groups related failures into incidents. The product interface brings the evidence, lineage, run history, and recovery status together in one place.
 
 ![Data Police incident overview](docs/screenshots/overview-incident.png)
 
-## Run it
+## What it includes
 
-Inside your D-backed Ubuntu WSL distribution, from the extracted project directory, with Docker Desktop's WSL integration running:
+| Area          | Implementation                                                                                             |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
+| Ingestion     | Typed SQL tables, paginated REST endpoints, and checksummed CSV snapshots                                  |
+| Processing    | Polars transformations and DuckDB SQL over committed Parquet files                                         |
+| Data quality  | Eight declarative rule types with validation, versions, and per-run results                                |
+| Profiling     | Row counts, schema, nulls, duplicates, cardinality, numeric summaries, distributions, and business metrics |
+| Detection     | Schema drift, freshness, volume, null, duplicate, categorical, numeric, and business-metric checks         |
+| Lineage       | One asset registry shared by execution, Dagster, persistence, and the interactive graph                    |
+| Incidents     | Lineage-aware correlation, evidence records, root-cause ranking, ownership, notes, and verified recovery   |
+| Investigation | Deterministic evidence reports plus an optional external AI provider with filtered inputs                  |
+| Runtime       | FastAPI, PostgreSQL, Redis, Celery, Dagster, Parquet, React, and server-sent events                        |
+| Operations    | Alembic migrations, Docker Compose, structured logs, health checks, tests, and GitHub Actions              |
+
+The included Northstar Retail workspace contains 19 connected datasets and ten failure scenarios. It is synthetic, so the full workflow can be demonstrated without company data or paid services.
+
+## Requirements
+
+Choose either the full Docker stack or the lighter local profile.
+
+|                   | Full Docker stack                                     | Local profile                             |
+| ----------------- | ----------------------------------------------------- | ----------------------------------------- |
+| Best for          | Complete product demonstration                        | Development and quick evaluation          |
+| Platforms         | Linux, macOS, or Windows with Docker Desktop and WSL2 | Linux, macOS, Windows PowerShell, or WSL2 |
+| Required          | Git, Python 3.12+, Docker with Compose v2             | Git, Python 3.12+, Node.js 22+, npm       |
+| Database and jobs | PostgreSQL, Redis, and Celery                         | SQLite and an in-process worker           |
+| Orchestration     | Dagster webserver and daemon                          | Built-in scheduler                        |
+
+Docker Desktop already includes Docker Engine, the Docker CLI, and Compose. Linux users may install Docker Engine with the Compose plugin instead. Use the current stable release of each tool.
+
+- [Docker Desktop and Compose](https://docs.docker.com/compose/install/)
+- [Docker Engine for Linux](https://docs.docker.com/engine/install/)
+- [Python downloads](https://www.python.org/downloads/)
+- [Node.js downloads](https://nodejs.org/en/download)
+
+The Python installation must include `pip` and the `venv` module. On Debian or Ubuntu, install the venv package that matches your Python version if it is not already present, for example `python3.12-venv`.
+
+On Windows, the Docker workflow is most reliable inside a WSL2 Linux distribution with Docker Desktop integration enabled. The local SQLite profile can also run directly from PowerShell.
+
+## Quick start with Docker
+
+Clone the repository:
+
+```bash
+git clone https://github.com/alitimusprime/data-police.git
+cd data-police
+```
+
+Create local credentials. On Linux, macOS, or WSL:
 
 ```bash
 python3 scripts/bootstrap.py
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.12 scripts/bootstrap.py
+```
+
+If the Python Launcher for Windows is not installed, use `python` in place of `py -3.12` after confirming that `python --version` reports Python 3.12 or newer.
+
+Bootstrap creates `.env` once and prints the administrator password. Running it again preserves the existing file.
+
+Build and start the stack:
+
+```bash
 docker compose up --build -d
 docker compose ps --all
 ```
 
-Open **http://localhost:8000** and sign in with the email and password printed by bootstrap. Keep those credentials private. First startup builds dependencies, applies the migration and measures 12 real baseline batches. Successful one-shot services such as `seed` show `Exited (0)`.
+The first startup builds the images, applies the database migration, starts the source services, and measures 12 baseline batches. Follow startup progress with:
 
-The complete stack includes PostgreSQL, Redis, Celery workers, a live provider API, an independent freshness monitor, Dagster scheduling and the product API. The lighter SQLite profile runs without Docker and is described in [START_HERE.md](START_HERE.md).
+```bash
+docker compose logs --tail=60 seed
+docker compose logs --tail=60 api worker monitor
+```
 
-## Demonstrate the product
+Open the following addresses after `seed` finishes with exit code `0`:
 
-1. Open Overview. The initial estate contains **19 datasets** and **14 enabled rules**. History is computed from measured batches.
-2. Open Failure lab, choose **Country code change**, then **Inject & run**.
-3. The provider returns `PAK` where the country dimension expects `PK`. The pipeline continues, country joins fail, and country revenue changes.
-4. Open the incident. `raw_payments` ranks above the downstream symptoms. Inspect its score contributions, evidence records and observed versus potential impact.
-5. Generate an investigation. Verified observations, inference and hypotheses are separate. Export the report and inspect the lineage path.
-6. Restore the healthy source, then complete two clean pipeline runs. The incident moves through monitoring to resolved.
+| Service           | Address                                                                           |
+| ----------------- | --------------------------------------------------------------------------------- |
+| Data Police       | [http://localhost:8000](http://localhost:8000)                                    |
+| Dagster           | [http://localhost:3001](http://localhost:3001)                                    |
+| API documentation | [http://localhost:8000/api/docs](http://localhost:8000/api/docs) after signing in |
 
-This scenario changes source data. The simulator does not insert an incident, overwrite a chart or prescribe the root-cause result. Monetary values and exact counts vary by batch; the example moves all Pakistan payments to an unmatched country, so it can show a 100% drop in resolved Pakistan revenue. That is a reporting allocation failure, not proof that total business revenue disappeared.
+The default email is `admin@datapolice.local`. Use the password printed by the bootstrap command or read `DP_ADMIN_PASSWORD` from your private `.env` file.
 
-## What is implemented
+Stop the services while keeping all saved data:
 
-| Capability | Implementation |
-| --- | --- |
-| SQL ingestion | Native typed source tables, parameterized SQLAlchemy queries and keyset paging within immutable batches |
-| REST ingestion | Live FastAPI provider, actual HTTP pagination, bounded retries, timeouts and response checks |
-| File ingestion | Supplier CSVs, directory allowlist, size/schema checks and SHA-256 checksums |
-| Processing | Polars cleanup and joins, DuckDB SQL aggregation over committed Parquet |
-| Historical profiling | Row and column counts, nulls, exact duplicates, cardinality, numeric summaries, categorical counts, timestamp ranges and selected business metrics |
-| Data quality | Eight declarative rule types, validation, saved versions, per-run outcomes and failed-value samples |
-| Detection | Schema differences, independent freshness, robust volume bounds, null/duplicate changes, JS and KS distribution tests, country-revenue anomalies |
-| Lineage | One asset contract drives execution, saved dependency edges, Dagster assets and the interactive graph |
-| Investigations | Directional graph/time correlation, immutable evidence, explainable candidate scores, ownership, notes and automatic recovery |
-| Optional AI | Configured chat-completions-compatible provider, filtered evidence packet, structured output and evidence-ID validation |
-| Durable work | Database run records, idempotency keys, shared lease, resumable asset commits and Redis/Celery delivery |
-| Product interface | Overview, catalog, dataset profiles, lineage, incident inbox/detail, pipelines, rules, sources, failure lab, activity and settings |
-| Operations | Alembic migration, containers, CI workflow, structured application logs, health endpoint and SSE live updates |
+```bash
+docker compose stop
+```
 
-## Verification and boundaries
+Start them again with `docker compose up -d`. Avoid `docker compose down -v` unless you intentionally want to remove persistent volumes.
 
-The local backend, real HTTP ingestion, real Redis/Celery delivery, Dagster in-process materializations and browser acceptance workflow have been exercised. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for exact results and reproduction commands.
+## Run without Docker
 
-The Docker stack and native PostgreSQL runtime are supplied but were **not executed in the build workspace**. Docker was unavailable, and native PostgreSQL initialization was blocked by process-ownership restrictions. CI includes PostgreSQL and container checks, but no remote CI run has been performed. A live external AI provider has not been tested.
+The local profile uses SQLite and the built-in worker. It still runs the SQL, HTTP, CSV, Parquet, profiling, detection, lineage, and incident workflows. PostgreSQL, Redis, Celery, and the Dagster services are only exercised by the Docker profile.
 
-This release does not provide multi-tenant SaaS isolation, SSO/RBAC, billing, generic connector onboarding, CDC, column-level lineage, seasonal forecasting, calibrated causal confidence, automated retention or a production availability guarantee. It is a complete integrated release for the supplied retail workspace, with those expansion boundaries made explicit.
+### Linux, macOS, or WSL
 
-## Engineering guide
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.lock
+cd web
+npm ci
+npm run build
+cd ..
+python scripts/bootstrap.py
+python scripts/start_local.py
+```
 
-| File | Use |
-| --- | --- |
-| [START_HERE.md](START_HERE.md) | Install and use Data Police on your Windows/WSL setup |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data flow, persistence, algorithm definitions and design decisions |
-| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Credentials, scheduling, backups, failure handling and configuration |
-| [docs/VERIFICATION.md](docs/VERIFICATION.md) | Test evidence and remaining runtime gates |
-| [docs/PRODUCT.md](docs/PRODUCT.md) | Product workflow, capability boundaries and next release priorities |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development, tests and extension contracts |
-| [SECURITY.md](SECURITY.md) | Implemented controls and deployment assumptions |
+### Windows PowerShell
 
-The Python code lives in `backend/data_police`, the React/TypeScript interface in `web/src`, and deployment definitions in `compose.yaml`, `Dockerfile` and `infra`. Sign in, then visit **http://localhost:8000/api/docs** for the interactive API reference. Its assets are bundled locally.
+These commands use the virtual environment directly, so changing PowerShell's script execution policy is unnecessary.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock
+Set-Location web
+npm ci
+npm run build
+Set-Location ..
+.\.venv\Scripts\python.exe scripts\bootstrap.py
+.\.venv\Scripts\python.exe scripts\start_local.py
+```
+
+Open [http://localhost:8000](http://localhost:8000). Press `Ctrl+C` in the terminal to stop the local API, provider, and scheduler. The local profile and Docker profile keep separate database histories, and they should not run on port 8000 at the same time.
+
+## Demonstration workflow
+
+1. Open **Overview** and confirm that all 19 datasets have baseline measurements.
+2. Open **Failure lab**, select **Country code change**, and choose **Inject & run**.
+3. The payment source begins returning `PAK` where the country dimension expects `PK`. The resulting join and country-revenue failures are detected from the processed data.
+4. Open the incident and inspect the ranked origin, score contributions, evidence records, affected assets, and lineage path.
+5. Generate the investigation report. Verified observations, inference, and unproven hypotheses are shown separately.
+6. Restore the healthy source and complete two clean runs. The incident moves through monitoring and then resolves.
+
+The simulator changes source or transformation behavior. It does not insert incidents directly or overwrite dashboard values. Counts and monetary values vary between batches because the demo data is generated with a saved seed.
+
+## How the services fit together
+
+```mermaid
+flowchart TD
+    UI[React interface] --> API[FastAPI]
+    API --> DB[(PostgreSQL or SQLite)]
+    API --> QUEUE[Redis and Celery]
+    QUEUE --> PIPE[Pipeline engine]
+    DAG[Dagster] --> PIPE
+    PIPE --> SRC[SQL, REST, and CSV sources]
+    PIPE --> FILES[Parquet batches]
+    PIPE --> DB
+    DB --> EVENTS[SSE updates]
+    EVENTS --> UI
+```
+
+PostgreSQL stores operational state. Parquet stores immutable analytical batches. Redis transports jobs, while durable run records remain in the database. Dagster and manual product runs call the same execution engine and share the same asset contract.
+
+## Repository layout
+
+| Path                  | Contents                                                                         |
+| --------------------- | -------------------------------------------------------------------------------- |
+| `backend/data_police` | API, connectors, pipeline, profiling, quality, detection, lineage, and incidents |
+| `web/src`             | React and TypeScript product interface                                           |
+| `migrations`          | Alembic database migrations                                                      |
+| `infra`               | PostgreSQL initialization and Dagster configuration                              |
+| `tests`               | Backend and integration tests                                                    |
+| `scripts`             | Bootstrap, local launcher, browser QA, audits, and release tooling               |
+| `docs`                | Architecture, operations, product scope, verification evidence, and screenshots  |
+| `compose.yaml`        | Full multi-service environment                                                   |
+
+## Testing
+
+The quickest checks are:
+
+```bash
+python -m pytest -q
+cd web
+npm run test
+npm run build
+```
+
+The full test workflow, browser acceptance setup, and database safety rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Recorded release evidence is in [docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+## Documentation
+
+| Document                                     | Purpose                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------- |
+| [START_HERE.md](START_HERE.md)               | Detailed Windows and WSL setup guide                                   |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data flow, persistence, algorithms, and design decisions               |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md)     | Configuration, scheduling, backup, retention, and troubleshooting      |
+| [docs/PRODUCT.md](docs/PRODUCT.md)           | Product workflow, scenarios, and release boundaries                    |
+| [docs/VERIFICATION.md](docs/VERIFICATION.md) | Test evidence and remaining runtime checks                             |
+| [CONTRIBUTING.md](CONTRIBUTING.md)           | Development setup and contribution checks                              |
+| [SECURITY.md](SECURITY.md)                   | Security controls, deployment assumptions, and vulnerability reporting |
+
+## Current scope
+
+Version 0.1 is a single-workspace, single-administrator release. It does not include multi-tenant isolation, SSO, role-based access control, CDC, generic connector onboarding, column-level lineage, seasonal forecasting, automated retention, or a production availability guarantee. Root-cause scores are explainable evidence rankings, not calibrated probabilities or proof of causation.

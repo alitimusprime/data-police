@@ -1,28 +1,104 @@
-# Security model
+# Security policy
 
-Data Police v0.1 is designed for a trusted local operator and synthetic retail data. The Docker API and Dagster ports bind to `127.0.0.1`. The provider, database and broker are internal container services.
+## Supported versions
+
+Security fixes are applied to the current release line and the `main` branch.
+
+| Version          | Status               |
+| ---------------- | -------------------- |
+| `main`           | Active development   |
+| `0.1.x`          | Current release line |
+| Earlier versions | Not supported        |
+
+## Reporting a vulnerability
+
+Please do not disclose a suspected vulnerability in a public issue, discussion, or pull request.
+
+Use [GitHub private vulnerability reporting](https://github.com/alitimusprime/data-police/security/advisories/new) when it is available. If GitHub does not show the private reporting form, open a public issue asking the maintainer for a private contact method, but do not include security details in that issue.
+
+A useful report includes:
+
+- The affected version or commit
+- A clear description of the issue and its impact
+- The minimum steps needed to reproduce it
+- Relevant logs with secrets, credentials, source rows, and personal data removed
+- Any suggested mitigation, if known
+
+Ordinary bugs and feature requests can use the [public issue tracker](https://github.com/alitimusprime/data-police/issues).
+
+## Deployment model
+
+Data Police is currently designed for one trusted workspace with one administrator. The administrator email and password are configured through environment variables. It does not yet provide separate user accounts, role-based access control, tenant isolation, SSO, account recovery, or individual session revocation.
+
+In the supplied Compose configuration, the product API and Dagster interface bind to `127.0.0.1`. PostgreSQL, Redis, and the synthetic provider remain on the internal container network. The default setup is intended for local evaluation and development, not direct exposure to the public internet.
+
+The `/api/health` endpoint and `/api/openapi.json` schema expose service metadata without authentication. Dataset contents, incident records, and the interactive API documentation require a valid session.
 
 ## Implemented controls
 
-- Bootstrap generates unique administrator, session, database and broker secrets. Startup checks the administrator password and session-secret lengths outside tests.
-- Sign-in issues an eight-hour signed HttpOnly, SameSite=Strict cookie. Password and signature comparisons are constant time. Sign-in attempts are limited per client address in the API process.
-- Data and mutation routes require authentication. Mutations require a custom request header and permitted Origin. Pydantic validates route input. A declared request-size check rejects oversized Content-Length values.
-- CSP, frame restrictions, MIME sniffing protection and API no-store headers apply to normal responses. Swagger assets are served locally.
-- SQL inputs are parameterized, source tables are allowlisted, file reads are restricted to the feed directory, and arbitrary rule code is not evaluated.
-- Application errors return safe messages. Application structured logs exclude raw exception text and credential values by design.
-- The default report uses local evidence. Optional AI requests require an operator action and omit raw failed-value samples and arbitrary nested details. Generated verified facts are discarded in favor of deterministic evidence.
-- The runtime image uses a non-root application user. A separate one-shot service sets ownership only on the application runtime directory.
+- Bootstrap generates unique administrator, session, database, and broker secrets in a private `.env` file.
+- Startup validates the administrator password and session secret outside the test environment.
+- Sign-in creates an eight-hour signed cookie with `HttpOnly` and `SameSite=Strict` attributes. Password and signature comparisons use constant-time checks.
+- Sign-in attempts are rate limited per client address within each API process.
+- Data and mutation routes require authentication. Mutations also require a custom request header and an allowed `Origin` when an origin is present.
+- Pydantic validates API input. A request-size check rejects requests whose declared `Content-Length` is too large.
+- SQL values are parameterized, source tables come from an internal registry, and file access is limited to the configured feed directory.
+- Responses set a Content Security Policy, prevent framing and MIME sniffing, and disable caching for API responses.
+- Application errors use safe client-facing messages. Structured application logs are designed to omit credentials, raw exception text, and source rows.
+- The application image runs as an unprivileged user after a one-time service prepares the runtime directory.
+- Optional AI output is constrained by a typed schema and cannot replace deterministic facts, scores, or evidence identifiers.
 
-## Boundaries before internet deployment
+## Secrets and local files
 
-There is one environment-configured administrator, with no password database, SSO, roles, account recovery, invitation or tenant isolation. The rate limiter is per process and does not coordinate across API replicas. Session-secret rotation invalidates issued sessions; individual session revocation is not implemented. The UI's administrative settings do not grant separate privileges.
+The bootstrap script writes credentials to `.env`. That file, the `runtime/` directory, build output, and local dependency directories are ignored by Git. Keep them private even when Git reports a clean working tree.
 
-TLS termination, ingress body-size enforcement, distributed rate limits, protected Dagster access, least-privilege production database users, backup encryption, a secrets manager and infrastructure audit logging are not provided. The Compose demo database user also owns the synthetic source ecosystem and is not a production read-only connector identity. Do not expose this stack publicly by changing a host bind address alone.
+Before committing or publishing changes, run:
 
-Raw Parquet, internal evidence samples and operational metadata are not encrypted at rest by the application. Protect the host filesystem and backups. The supplied data is synthetic. Replacing it with sensitive real data requires a deliberate access, retention and redaction design.
+```bash
+python scripts/secret_audit.py
+git status --short
+git diff --cached
+```
 
-The `/api/health` endpoint and OpenAPI schema are public metadata. Dataset contents and incident records require authentication. Configured URLs are administrator controlled; a public arbitrary-URL fetch endpoint is not exposed.
+The audit script catches common secret patterns, but it is not a complete guarantee. Review staged files for:
 
-## Reporting a problem
+- `.env` contents or resolved Compose configuration
+- Passwords, API keys, tokens, cookies, and database URLs
+- Production data, failed-value samples, or exported evidence
+- Private hostnames, internal addresses, and customer identifiers
 
-No external issue tracker or security mailbox is configured for this generated release. Use your repository's private reporting channel after establishing one. When sharing a reproduction, exclude `.env`, source rows, passwords, tokens, resolved Compose configuration and database URLs. Share the sanitized error type, run/request ID, relevant version and minimum reproduction steps.
+If a secret enters Git history, rotate or revoke it first. Removing it from a later commit does not make the original value safe.
+
+## Optional AI provider
+
+The standard incident report is deterministic and does not require an AI provider. AI analysis only runs after an explicit operator action.
+
+The provider request may contain dataset identifiers, contracts, monitor metadata, observed metrics, allowlisted aggregate values, and evidence identifiers. It excludes raw source rows, raw failed-value samples, and arbitrary nested evidence. This reduces exposure but does not make the remaining metadata anonymous. Review the configured provider's data handling policy before enabling it for a real environment.
+
+Provider output is treated as untrusted. The application validates its schema and keeps deterministic facts and evidence authoritative. Generated text is limited to interpretation, hypotheses, and recommendations.
+
+## Before exposing the service to a network
+
+Do not make the stack public by changing a bind address alone. A production deployment needs, at minimum:
+
+- TLS termination and secure cookie transport
+- An identity provider, account lifecycle, roles, and tenant boundaries appropriate to the deployment
+- Network access controls for both the product API and Dagster
+- Distributed rate limiting and ingress-level request-size limits
+- Separate least-privilege database identities for the application and connected sources
+- A managed secrets store and documented rotation process
+- Encryption and access controls for databases, warehouse files, logs, and backups
+- Defined retention, audit, monitoring, incident response, backup, and recovery procedures
+- Dependency, container image, and infrastructure vulnerability scanning
+
+The Compose database user owns the included synthetic source ecosystem. It is not a suitable read-only identity for a production connector.
+
+## Data and backup protection
+
+Data Police does not provide application-level encryption at rest. Protect the host filesystem, Docker volumes, warehouse directory, database, logs, and backups using the controls provided by the operating system and deployment platform.
+
+The included retail data is synthetic. Connecting real or regulated data requires a deliberate access, retention, redaction, and deletion policy. Back up the PostgreSQL database and the warehouse files together so incident metadata and evidence remain consistent.
+
+## Dependency security
+
+Python dependencies are pinned in `requirements.lock`, and frontend dependencies are locked in `web/package-lock.json`. Dependency changes should include regenerated lock data and the relevant test results. Published security advisories and automated audit tools are useful inputs, but their results still require review for reachability and impact in this project.
